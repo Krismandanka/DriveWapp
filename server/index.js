@@ -92,13 +92,97 @@ app.get("/auth/callback", async (req, res) => {
 });
 
 // Upload file endpoint
-app.post("/upload", upload.single("file"), async (req, res) => {
-  const { email } = req.body;
+// app.post("/upload", upload.single("file"), async (req, res) => {
+//   const { email } = req.body;
   
+//   if (!email) {
+//     return res.status(400).json({ error: "No email provided" });
+//   }
+  
+//   if (!req.file) {
+//     return res.status(400).json({ error: "No file uploaded" });
+//   }
+
+//   // Sanitize email for filename
+//   const safeEmail = email.replace(/[^a-zA-Z0-9]/g, "_");
+//   const tokenPath = path.join(tokensDir, `${safeEmail}.json`);
+  
+//   if (!fs.existsSync(tokenPath)) {
+//     return res.status(401).json({ error: "Not authenticated. Please login first." });
+//   }
+
+//   try {
+//     const tokens = JSON.parse(fs.readFileSync(tokenPath));
+//     const oAuth2Client = getOAuthClient();
+//     oAuth2Client.setCredentials(tokens);
+    
+//     const drive = google.drive({ version: "v3", auth: oAuth2Client });
+
+//     const fileMetadata = { name: req.file.originalname };
+//     const media = {
+//       mimeType: req.file.mimetype,
+//       body: fs.createReadStream(req.file.path),
+//     };
+
+//     const file = await drive.files.create({
+//       resource: fileMetadata,
+//       media: media,
+//       fields: "id",
+//     });
+
+//     // Clean up the uploaded file
+//     fs.unlinkSync(req.file.path);
+    
+//     res.json({ 
+//       message: `File uploaded to account: ${email}`,
+//       fileId: file.data.id
+//     });
+//   } catch (err) {
+//     console.error("Upload error:", err);
+//     res.status(500).json({ error: "Upload failed" });
+//   }
+// });
+async function getOrCreateFolder(drive, folderName) {
+  try {
+    // Check if the folder already exists
+    const response = await drive.files.list({
+      q: `mimeType='application/vnd.google-apps.folder' and name='${folderName}'`,
+      fields: "files(id, name)",
+      spaces: "drive",
+    });
+
+    if (response.data.files.length > 0) {
+      console.log("Folder already exists:", response.data.files[0].id);
+      return response.data.files[0].id; // Return existing folder ID
+    }
+
+    // Create a new folder if it doesn't exist
+    const folderMetadata = {
+      name: folderName,
+      mimeType: "application/vnd.google-apps.folder",
+    };
+
+    const folder = await drive.files.create({
+      resource: folderMetadata,
+      fields: "id",
+    });
+
+    console.log("Created folder:", folder.data.id);
+    return folder.data.id; // Return new folder ID
+  } catch (error) {
+    console.error("Error creating folder:", error);
+    throw new Error("Failed to create or find folder");
+  }
+}
+
+
+app.post("/upload", upload.single("file"), async (req, res) => {
+  const { email ,fileName} = req.body;
+
   if (!email) {
     return res.status(400).json({ error: "No email provided" });
   }
-  
+
   if (!req.file) {
     return res.status(400).json({ error: "No file uploaded" });
   }
@@ -106,7 +190,7 @@ app.post("/upload", upload.single("file"), async (req, res) => {
   // Sanitize email for filename
   const safeEmail = email.replace(/[^a-zA-Z0-9]/g, "_");
   const tokenPath = path.join(tokensDir, `${safeEmail}.json`);
-  
+
   if (!fs.existsSync(tokenPath)) {
     return res.status(401).json({ error: "Not authenticated. Please login first." });
   }
@@ -115,10 +199,19 @@ app.post("/upload", upload.single("file"), async (req, res) => {
     const tokens = JSON.parse(fs.readFileSync(tokenPath));
     const oAuth2Client = getOAuthClient();
     oAuth2Client.setCredentials(tokens);
-    
+
     const drive = google.drive({ version: "v3", auth: oAuth2Client });
 
-    const fileMetadata = { name: req.file.originalname };
+    // Step 1: Check if folder exists or create it
+    const folderName = fileName; // Change this to your desired folder name
+    let folderId = await getOrCreateFolder(drive, folderName);
+
+    // Step 2: Upload file inside the folder
+    const fileMetadata = {
+      name: req.file.originalname,
+      parents: [folderId], // Specify the folder ID
+    };
+
     const media = {
       mimeType: req.file.mimetype,
       body: fs.createReadStream(req.file.path),
@@ -130,18 +223,20 @@ app.post("/upload", upload.single("file"), async (req, res) => {
       fields: "id",
     });
 
-    // Clean up the uploaded file
+    // Clean up the uploaded file from server
     fs.unlinkSync(req.file.path);
-    
-    res.json({ 
-      message: `File uploaded to account: ${email}`,
-      fileId: file.data.id
+
+    res.json({
+      message: `File uploaded inside '${folderName}' folder for account: ${email}`,
+      fileId: file.data.id,
     });
+
   } catch (err) {
     console.error("Upload error:", err);
     res.status(500).json({ error: "Upload failed" });
   }
 });
+
 
 // Check if a user is authenticated
 app.get("/check-auth/:email", (req, res) => {
